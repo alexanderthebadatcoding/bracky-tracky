@@ -75,9 +75,20 @@ export default function App() {
     return Math.round(num).toString();
   };
 
-  // pick only Etherscan "transfer" actions
-  const handleOpsTransactions = allTransfers.filter(
-    (tx) => (tx.action || "").toLowerCase() === "transfer"
+  // Helper: treat entries with explicit action === "transfer" as transfers,
+  // exclude action === "handleops". Fallback: tokentx-style results often don't
+  // include `action`; treat entries that look like token transfers (tokenSymbol & value) as transfers.
+  const isTransferAction = (tx: any) => {
+    const action = (tx.action || "").toLowerCase();
+    if (action) return action === "transfer";
+    // fallback for tokentx responses which don't include `action`
+    return !!tx.tokenSymbol && !!tx.value && tx.value !== "0";
+  };
+
+  // Use only transfer-action entries for the "Deposits and Withdrawals" table and the sorted list.
+  // allTransfers still holds the raw token-like results returned from the API.
+  const handleOpsTransactions = allTransfers.filter((tx) =>
+    isTransferAction(tx)
   );
 
   // unchanged helpers
@@ -96,15 +107,16 @@ export default function App() {
     return raw / Math.pow(10, decimals);
   };
 
-  // groupTransactionsByDay now groups raw transfer volume per day (no address)
-  const groupTransactionsByDay = (transfers: any[]) => {
+  // groupTransactionsByDay classifies by address (received/sent) and only counts transfer-action entries.
+  const groupTransactionsByDay = (transfers: any[], address: string) => {
     const dayMap: { [key: string]: TransactionData } = {};
     const now = Date.now();
     const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
+    const user = (address || "").toLowerCase();
 
     transfers.forEach((tx: any) => {
-      // ensure it's an Etherscan transfer entry
-      if ((tx.action || "").toLowerCase() !== "transfer") return;
+      // only consider Etherscan "transfer" action entries (and fallback tokentx transfers)
+      if (!isTransferAction(tx)) return;
 
       const txTime = toMs(tx.timeStamp);
       if (Number.isNaN(txTime)) return;
@@ -115,9 +127,6 @@ export default function App() {
 
       if (!dayMap[dateKey]) {
         dayMap[dateKey] = {
-          // using the existing shape: received, sent, net
-          // here `received` holds total transfer volume for the date,
-          // `sent` left as 0 (or could be repurposed if you want separate incoming/outgoing totals),
           day: dateKey,
           received: 0,
           sent: 0,
@@ -127,8 +136,12 @@ export default function App() {
 
       const value = parseValue(tx);
 
-      // accumulate total transfer volume (you can rename fields if you prefer)
-      dayMap[dateKey].received += value;
+      if ((tx.to || "").toLowerCase() === user) {
+        dayMap[dateKey].received += value;
+      } else if ((tx.from || "").toLowerCase() === user) {
+        dayMap[dateKey].sent += value;
+      }
+
       dayMap[dateKey].net = dayMap[dateKey].received - dayMap[dateKey].sent;
     });
 
@@ -144,7 +157,7 @@ export default function App() {
     return result;
   };
 
-  // Build a 10-day balance series anchored to currentBalance from raw transfers.
+  // Build a 10-day balance series anchored to currentBalance from transfer-action entries.
   // Today's point equals currentBalance; prior days reconstructed by subtracting deltas after day end.
   // Balances are clamped to >= 0.
   const generateBalanceChartFromCurrent = (
@@ -156,6 +169,7 @@ export default function App() {
     const user = (userAddress || "").toLowerCase();
 
     const enriched = rawTransfers
+      .filter(isTransferAction)
       .map((tx: any) => {
         const timeMs = toMs(tx.timeStamp);
         const to = (tx.to || "").toLowerCase();
@@ -222,6 +236,7 @@ export default function App() {
 
     const activeDays = new Set<string>();
     transfers.forEach((tx: any) => {
+      if (!isTransferAction(tx)) return;
       const txTime = toMs(tx.timeStamp);
       if (Number.isNaN(txTime)) return;
       const date = new Date(txTime);
@@ -259,10 +274,13 @@ export default function App() {
     return streak;
   };
 
-  // processTransactionData now derives currentBalance and balanceTenDaysAgo from raw transfers so chart and stats align
+  // processTransactionData now derives stats/chart from transfer-action entries only
   const processTransactionData = (transfers: any[], userAddress: string) => {
     const now = Date.now();
     const tenDaysAgo = now - 10 * 24 * 60 * 60 * 1000;
+    const user = (userAddress || "").toLowerCase();
+
+    const transferActions = transfers.filter(isTransferAction);
 
     let balanceTenDaysAgo = 0;
     let receivedLast10Days = 0;
@@ -270,7 +288,7 @@ export default function App() {
     let buySharesTotal = 0;
     let buySharesCount = 0;
 
-    const firstTx = transfers.reduce((earliest: any, tx: any) => {
+    const firstTx = transferActions.reduce((earliest: any, tx: any) => {
       if (!earliest || parseInt(tx.timeStamp) < parseInt(earliest.timeStamp)) {
         return tx;
       }
@@ -281,28 +299,28 @@ export default function App() {
       ? new Date(parseInt(firstTx.timeStamp) * 1000).toLocaleDateString()
       : "Unknown";
 
-    const activeStreak = calculateActiveStreak(transfers);
+    const activeStreak = calculateActiveStreak(transferActions);
 
-    // Compute balanceTenDaysAgo and last10days totals from raw transfers (no special exclusion).
-    transfers.forEach((tx: any) => {
+    // Compute balanceTenDaysAgo and last10days totals from transfer-action entries.
+    transferActions.forEach((tx: any) => {
       const txTime = toMs(tx.timeStamp);
       if (Number.isNaN(txTime)) return;
       const value = parseValue(tx);
 
+      // Note: functionName may not exist on tokentx responses; keep existing heuristic
       const isBuyShares = (tx.functionName || "").includes("handleOps");
-
       if (isBuyShares) {
         buySharesTotal += value;
         buySharesCount++;
       }
 
-      if ((tx.to || "").toLowerCase() === userAddress.toLowerCase()) {
+      if ((tx.to || "").toLowerCase() === user) {
         if (txTime < tenDaysAgo) {
           balanceTenDaysAgo += value;
         } else {
           receivedLast10Days += value;
         }
-      } else if ((tx.from || "").toLowerCase() === userAddress.toLowerCase()) {
+      } else if ((tx.from || "").toLowerCase() === user) {
         if (txTime < tenDaysAgo) {
           balanceTenDaysAgo -= value;
         } else {
@@ -311,28 +329,23 @@ export default function App() {
       }
     });
 
-    // Totals from raw transfers (no filtering) so currentBalance matches the token ledger
-    const totalReceived = transfers
-      .filter(
-        (tx: any) => (tx.to || "").toLowerCase() === userAddress.toLowerCase()
-      )
+    // Totals from transfer-action entries
+    const totalReceived = transferActions
+      .filter((tx: any) => (tx.to || "").toLowerCase() === user)
       .reduce((sum: number, tx: any) => sum + parseValue(tx), 0);
 
-    const totalSent = transfers
-      .filter(
-        (tx: any) => (tx.from || "").toLowerCase() === userAddress.toLowerCase()
-      )
+    const totalSent = transferActions
+      .filter((tx: any) => (tx.from || "").toLowerCase() === user)
       .reduce((sum: number, tx: any) => sum + parseValue(tx), 0);
 
-    // currentBalance is totalReceived - totalSent (raw). buySharesTotal still tracked for info.
     const currentBalance = totalReceived - totalSent;
     const netChangeLast10Days = receivedLast10Days - sentLast10Days;
 
-    const dailyTx = groupTransactionsByDay(transfers);
+    const dailyTx = groupTransactionsByDay(transferActions, userAddress);
 
-    // Generate chart anchored to currentBalance using raw transfers
+    // Generate chart anchored to currentBalance using transfer-action entries
     const balanceChart = generateBalanceChartFromCurrent(
-      transfers,
+      transferActions,
       userAddress,
       currentBalance
     );
@@ -340,12 +353,12 @@ export default function App() {
     setTxData(dailyTx);
     setChartData(balanceChart);
 
-    const receiveCount = transfers.filter(
-      (tx: any) => (tx.to || "").toLowerCase() === userAddress.toLowerCase()
+    const receiveCount = transferActions.filter(
+      (tx: any) => (tx.to || "").toLowerCase() === user
     ).length;
 
-    const sendCount = transfers.filter(
-      (tx: any) => (tx.from || "").toLowerCase() === userAddress.toLowerCase()
+    const sendCount = transferActions.filter(
+      (tx: any) => (tx.from || "").toLowerCase() === user
     ).length;
 
     setStats({
@@ -353,7 +366,7 @@ export default function App() {
       totalReceived: totalReceived.toFixed(2),
       totalSent: totalSent.toFixed(2),
       netBalance: currentBalance.toFixed(2),
-      totalTransactions: transfers.length,
+      totalTransactions: transferActions.length,
       receiveCount,
       sendCount,
       currentBalance: currentBalance.toFixed(2),
@@ -435,6 +448,7 @@ export default function App() {
         return;
       }
 
+      // Basic defensive filter: only token transfer-like entries (no NFT id, has decimals/symbol/value)
       const transfers = data.result.filter(
         (tx: {
           tokenDecimal: any;
@@ -460,6 +474,8 @@ export default function App() {
         return;
       }
 
+      // Only process entries that are transfer-action entries (explicit Etherscan action === "transfer"
+      // OR tokentx-style entries via the isTransferAction fallback)
       processTransactionData(transfers, address);
     } catch (err) {
       console.error("API Error:", err);
