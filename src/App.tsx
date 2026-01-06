@@ -100,25 +100,6 @@ export default function App() {
     return raw / Math.pow(10, decimals);
   };
 
-  // Small helper to shorten addresses for display
-  const shortAddr = (addr?: string) =>
-    addr ? `${addr.slice(0, 8)}...${addr.slice(-6)}` : "";
-
-  // Human-readable relative age (approx)
-  const humanAge = (ts: any) => {
-    const m = toMs(ts);
-    if (Number.isNaN(m)) return "";
-    const diff = Date.now() - m;
-    const sec = Math.floor(diff / 1000);
-    if (sec < 60) return `${sec}s ago`;
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min}m ago`;
-    const hrs = Math.floor(min / 60);
-    if (hrs < 24) return `${hrs} hrs ago`;
-    const days = Math.floor(hrs / 24);
-    return `${days} days ago`;
-  };
-
   // groupTransactionsByDay classifies by address (received/sent) and only counts transfer-action entries.
   const groupTransactionsByDay = (transfers: any[], address: string) => {
     const dayMap: { [key: string]: TransactionData } = {};
