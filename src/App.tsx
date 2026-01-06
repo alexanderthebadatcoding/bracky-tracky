@@ -62,9 +62,7 @@ export default function App() {
   const [allTransfers, setAllTransfers] = useState<any[]>([]);
   const [isTableOpen, setIsTableOpen] = useState(false);
 
-  const formatNumber = (num: number) =>
-    num.toLocaleString(undefined, { maximumFractionDigits: 2 });
-
+  // Utility: format number in compact form (e.g., 1.2K, 3.4M)
   const formatCompactNumber = (num: number) => {
     if (Math.abs(num) >= 1000000) {
       return (num / 1000000).toFixed(1) + "M";
@@ -760,7 +758,7 @@ export default function App() {
                               className="border-b border-gray-100"
                             >
                               <td className="py-2 px-2 text-sm">
-                                {formatNumber(value)}
+                                {formatCompactNumber(value)}
                               </td>
                               <td className="py-2 px-2 text-xs text-gray-600">
                                 {date}
