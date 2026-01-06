@@ -378,15 +378,33 @@ export default function App() {
     setError("");
 
     try {
-      const ETHERSCAN_API_KEY = import.meta.env.VITE_ETHERSCAN_API_KEY;
       const BRACKY_CONTRACT = "0x06f71fb90F84b35302d132322A3C90E4477333b0";
       const CHAIN_ID = "8453";
 
-      const query = await fetch(
-        `https://api.etherscan.io/v2/api?chainid=${CHAIN_ID}&module=account&action=tokentx&contractaddress=${BRACKY_CONTRACT}&address=${address}&startblock=0&endblock=99999999&sort=asc&apikey=${ETHERSCAN_API_KEY}`
+      // Call your Netlify Function instead of calling Etherscan directly
+      const resp = await fetch(
+        `/.netlify/functions/etherscan-proxy?address=${encodeURIComponent(
+          address
+        )}&contractaddress=${encodeURIComponent(
+          BRACKY_CONTRACT
+        )}&chainid=${encodeURIComponent(CHAIN_ID)}`
       );
 
-      const data = await query.json();
+      if (!resp.ok) {
+        const errBody = await resp
+          .json()
+          .catch(() => ({ message: "Unknown error" }));
+        setError(
+          `Proxy error: ${errBody.error || errBody.message || resp.statusText}`
+        );
+        setTxData(null);
+        setChartData(null);
+        setStats(null);
+        setIsLoading(false);
+        return;
+      }
+
+      const data = await resp.json();
 
       if (data.status === "0" || data.message === "NOTOK") {
         const errorMsg = data.result || data.message || "Unknown API error";
@@ -412,7 +430,12 @@ export default function App() {
       }
 
       const transfers = data.result.filter(
-        (tx: any) =>
+        (tx: {
+          tokenDecimal: any;
+          tokenSymbol: any;
+          tokenID: any;
+          value: string;
+        }) =>
           tx.tokenDecimal &&
           tx.tokenSymbol &&
           !tx.tokenID &&
@@ -434,7 +457,7 @@ export default function App() {
       processTransactionData(transfers, address);
     } catch (err) {
       console.error("API Error:", err);
-      setError("Failed to fetch data. Check API key and contract address.");
+      setError("Failed to fetch data. Check server logs and configuration.");
     } finally {
       setIsLoading(false);
     }
