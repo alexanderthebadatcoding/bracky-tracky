@@ -437,7 +437,12 @@ export default function App() {
       }
 
       const transfers = data.result.filter(
-        (tx) =>
+        (tx: {
+          tokenDecimal: any;
+          tokenSymbol: any;
+          tokenID: any;
+          value: string;
+        }) =>
           tx.tokenDecimal &&
           tx.tokenSymbol &&
           !tx.tokenID &&
