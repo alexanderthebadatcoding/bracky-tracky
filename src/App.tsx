@@ -75,16 +75,7 @@ export default function App() {
     return Math.round(num).toString();
   };
 
-  // Helper: treat entries with explicit action === "transfer" as transfers,
-  // exclude action === "handleops". Fallback used elsewhere; for grouping we allow fallback tokentx entries.
-  const isTransferAction = (tx: any) => {
-    const action = (tx.action || "").toLowerCase();
-    if (action) return action === "transfer";
-    // fallback for tokentx responses which don't include `action`
-    return !!tx.tokenSymbol && !!tx.value && tx.value !== "0";
-  };
-
-  // unchanged helpers
+  // Utility: convert Etherscan timestamp or unix string to ms
   const toMs = (ts: any): number => {
     if (ts === undefined || ts === null) return NaN;
     const s = String(ts).trim();
@@ -93,6 +84,7 @@ export default function App() {
     return s.length <= 10 ? n * 1000 : n;
   };
 
+  // Parse ERC-20 token value (value is integer with tokenDecimal)
   const parseValue = (tx: any) => {
     const decimals = parseInt(tx.tokenDecimal || "18", 10) || 18;
     const raw = Number(tx.value ?? 0);
@@ -100,7 +92,27 @@ export default function App() {
     return raw / Math.pow(10, decimals);
   };
 
-  // groupTransactionsByDay classifies by address (received/sent) and only counts transfer-action entries.
+  // Heuristic: treat items as transfer-action for charts/grouping (fallback for tokentx)
+  const isTransferAction = (tx: any) => {
+    const action = (tx.action || "").toLowerCase();
+    if (action) return action === "transfer";
+    return !!tx.tokenSymbol && !!tx.value && tx.value !== "0";
+  };
+
+  // Detect explicit ERC-20 transfer function rows for the table:
+  // - functionName exactly matches the common Etherscan representation OR
+  // - functionName startsWith "transfer(" OR
+  // - input begins with ERC-20 transfer selector 0xa9059cbb
+  const isTransferFunction = (tx: any) => {
+    const fn = (tx.functionName || "").toString().trim();
+    if (fn === "transfer(address recipient,uint256 amount)") return true;
+    if (fn.toLowerCase().startsWith("transfer(")) return true;
+    const input = (tx.input || "").toLowerCase();
+    if (input.startsWith("0xa9059cbb")) return true; // ERC-20 transfer selector
+    return false;
+  };
+
+  // groupTransactionsByDay classifies by address (received/sent)
   const groupTransactionsByDay = (transfers: any[], address: string) => {
     const dayMap: { [key: string]: TransactionData } = {};
     const now = Date.now();
@@ -108,7 +120,6 @@ export default function App() {
     const user = (address || "").toLowerCase();
 
     transfers.forEach((tx: any) => {
-      // only consider Etherscan "transfer" action entries (and fallback tokentx transfers)
       if (!isTransferAction(tx)) return;
 
       const txTime = toMs(tx.timeStamp);
@@ -150,7 +161,7 @@ export default function App() {
     return result;
   };
 
-  // Build a 10-day balance series anchored to currentBalance from transfer-action entries.
+  // Build a 10-day balance series anchored to currentBalance
   const generateBalanceChartFromCurrent = (
     rawTransfers: any[],
     userAddress: string,
@@ -175,7 +186,6 @@ export default function App() {
     const deltas = enriched.map((e) => e.delta);
     const times = enriched.map((e) => e.timeMs);
 
-    // Build suffix sums to get sum of deltas after a given time quickly
     const suffixSum: number[] = new Array(deltas.length);
     let s = 0;
     for (let i = deltas.length - 1; i >= 0; i--) {
@@ -184,7 +194,6 @@ export default function App() {
     }
 
     const sumDeltasAfter = (t: number) => {
-      // binary search first index with times[idx] > t
       let lo = 0;
       let hi = times.length - 1;
       let ans = times.length;
@@ -292,13 +301,11 @@ export default function App() {
 
     const activeStreak = calculateActiveStreak(transferActions);
 
-    // Compute balanceTenDaysAgo and last10days totals from transfer-action entries.
     transferActions.forEach((tx: any) => {
       const txTime = toMs(tx.timeStamp);
       if (Number.isNaN(txTime)) return;
       const value = parseValue(tx);
 
-      // Note: functionName may not exist on tokentx responses; keep existing heuristic
       const isBuyShares = (tx.functionName || "").includes("handleOps");
       if (isBuyShares) {
         buySharesTotal += value;
@@ -320,7 +327,6 @@ export default function App() {
       }
     });
 
-    // Totals from transfer-action entries
     const totalReceived = transferActions
       .filter((tx: any) => (tx.to || "").toLowerCase() === user)
       .reduce((sum: number, tx: any) => sum + parseValue(tx), 0);
@@ -334,7 +340,6 @@ export default function App() {
 
     const dailyTx = groupTransactionsByDay(transferActions, userAddress);
 
-    // Generate chart anchored to currentBalance using transfer-action entries
     const balanceChart = generateBalanceChartFromCurrent(
       transferActions,
       userAddress,
@@ -384,7 +389,6 @@ export default function App() {
       const BRACKY_CONTRACT = "0x06f71fb90F84b35302d132322A3C90E4477333b0";
       const CHAIN_ID = "8453";
 
-      // Include required Etherscan params (module & action).
       const params = new URLSearchParams({
         module: "account",
         action: "tokentx",
@@ -465,7 +469,6 @@ export default function App() {
         return;
       }
 
-      // Process the fetched transfer-like entries
       processTransactionData(transfers, address);
     } catch (err) {
       console.error("API Error:", err);
@@ -475,41 +478,13 @@ export default function App() {
     }
   };
 
-  // ---- New: Deposits/Withdrawals table data + console logging for debugging ----
-  // Show deposits & withdrawals table using all token-transfer-like entries (both "Handle Ops" and "Transfer" methods).
-  const depositsWithdrawals = allTransfers.filter(
-    (tx) => tx.tokenSymbol && tx.value && tx.value !== "0"
+  // Table: only include transactions where functionName indicates ERC-20 transfer
+  const transferOnlyForTable = allTransfers.filter((tx) =>
+    isTransferFunction(tx)
   );
-
-  // sorted newest first
-  const sortedDepositsWithdrawals = [...depositsWithdrawals].sort(
+  const sortedTransferOnly = [...transferOnlyForTable].sort(
     (a, b) => toMs(b.timeStamp) - toMs(a.timeStamp)
   );
-
-  // Console-log action/method-ish fields so you can inspect what's coming from Etherscan
-  // (hash included to correlate rows). This runs on each render; you can remove or gate it later.
-  useEffect(() => {
-    if (sortedDepositsWithdrawals.length === 0) return;
-    console.group(`Deposits/Withdrawals: ${sortedDepositsWithdrawals.length}`);
-    sortedDepositsWithdrawals.slice(0, 50).forEach((tx) => {
-      // tx.action is used by some Etherscan endpoints; functionName/method/input may appear depending on proxy
-      // Log the fields that could indicate "Handle Ops" vs "Transfer"
-      console.log(tx.hash, {
-        action: tx.action,
-        method: tx.method,
-        functionName: tx.functionName,
-        input: tx.input,
-        from: tx.from,
-        to: tx.to,
-        tokenSymbol: tx.tokenSymbol,
-        value: parseValue(tx),
-        blockNumber: tx.blockNumber,
-        timeStamp: tx.timeStamp,
-      });
-    });
-    console.groupEnd();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allTransfers]); // only re-run when raw transfers update
 
   const handleTrack = () => fetchAddressData();
   const isPositive = stats && parseFloat(stats.netChangeLast10Days) >= 0;
@@ -737,7 +712,7 @@ export default function App() {
                 className="w-full p-5 flex items-center justify-between hover:bg-gray-50 transition"
               >
                 <h2 className="text-base sm:text-lg font-bold text-gray-800">
-                  Deposits and Withdrawals ({sortedDepositsWithdrawals.length})
+                  Deposits and Withdrawals ({sortedTransferOnly.length})
                 </h2>
                 {isTableOpen ? (
                   <ChevronUp className="w-5 h-5 text-gray-600" />
@@ -755,44 +730,29 @@ export default function App() {
                           <th className="py-2 px-2 text-sm">Amount</th>
                           <th className="py-2 px-2 text-sm">Date</th>
                           <th className="py-2 px-2 text-sm">Type</th>
-                          <th className="py-2 px-2 text-sm">Method / Action</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedDepositsWithdrawals.map((tx) => {
+                        {sortedTransferOnly.map((tx) => {
                           const value = parseValue(tx);
                           const date = new Date(
                             toMs(tx.timeStamp)
                           ).toLocaleDateString();
 
-                          let type = "";
-                          if (
-                            (tx.to || "").toLowerCase() ===
-                            address.toLowerCase()
-                          ) {
-                            type = "Deposit";
-                          } else if (
-                            (tx.from || "").toLowerCase() ===
-                            address.toLowerCase()
-                          ) {
-                            type = "Withdrawal";
+                          let type = "—";
+                          if (address) {
+                            if (
+                              (tx.to || "").toLowerCase() ===
+                              address.toLowerCase()
+                            ) {
+                              type = "Deposit";
+                            } else if (
+                              (tx.from || "").toLowerCase() ===
+                              address.toLowerCase()
+                            ) {
+                              type = "Withdrawal";
+                            }
                           }
-
-                          // Log each row's action/method to console for debugging (also logged in the effect above).
-                          // This extra log helps while inspecting row-level rendering.
-                          console.log("ROW ACTION/METHOD", tx.hash, {
-                            action: tx.action,
-                            method: tx.method,
-                            functionName: tx.functionName,
-                            input: tx.input,
-                          });
-
-                          const methodLabel = (
-                            tx.action ||
-                            tx.method ||
-                            tx.functionName ||
-                            "Transfer"
-                          ).toString();
 
                           return (
                             <tr
@@ -810,14 +770,13 @@ export default function App() {
                                   className={`${
                                     type === "Deposit"
                                       ? "text-green-600"
-                                      : "text-red-600"
+                                      : type === "Withdrawal"
+                                        ? "text-red-600"
+                                        : "text-gray-600"
                                   } font-semibold`}
                                 >
-                                  {type || "—"}
+                                  {type}
                                 </span>
-                              </td>
-                              <td className="py-2 px-2 text-sm text-gray-700">
-                                {methodLabel}
                               </td>
                             </tr>
                           );
