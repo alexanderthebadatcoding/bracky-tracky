@@ -76,8 +76,7 @@ export default function App() {
   };
 
   // Helper: treat entries with explicit action === "transfer" as transfers,
-  // exclude action === "handleops". Fallback: tokentx-style results often don't
-  // include `action`; treat entries that look like token transfers (tokenSymbol & value) as transfers.
+  // exclude action === "handleops". Fallback used elsewhere; for the table we only show explicit transfers.
   const isTransferAction = (tx: any) => {
     const action = (tx.action || "").toLowerCase();
     if (action) return action === "transfer";
@@ -85,11 +84,15 @@ export default function App() {
     return !!tx.tokenSymbol && !!tx.value && tx.value !== "0";
   };
 
-  // Use only transfer-action entries for the "Deposits and Withdrawals" table and the sorted list.
-  // allTransfers still holds the raw token-like results returned from the API.
-  const handleOpsTransactions = allTransfers.filter((tx) =>
-    isTransferAction(tx)
+  // For the Deposits/Withdrawals table we will only show explicit transfer actions (action === "Transfer")
+  const transferOnlyForTable = allTransfers.filter(
+    (tx) => (tx.action || "").toLowerCase() === "transfer"
   );
+
+  // Latest 25 transfers for table, sorted by time desc
+  const latest25Transfers = [...transferOnlyForTable]
+    .sort((a, b) => toMs(b.timeStamp) - toMs(a.timeStamp))
+    .slice(0, 25);
 
   // unchanged helpers
   const toMs = (ts: any): number => {
@@ -105,6 +108,25 @@ export default function App() {
     const raw = Number(tx.value ?? 0);
     if (!Number.isFinite(raw)) return 0;
     return raw / Math.pow(10, decimals);
+  };
+
+  // Small helper to shorten addresses for display
+  const shortAddr = (addr?: string) =>
+    addr ? `${addr.slice(0, 8)}...${addr.slice(-6)}` : "";
+
+  // Human-readable relative age (approx)
+  const humanAge = (ts: any) => {
+    const m = toMs(ts);
+    if (Number.isNaN(m)) return "";
+    const diff = Date.now() - m;
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hrs = Math.floor(min / 60);
+    if (hrs < 24) return `${hrs} hrs ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days} days ago`;
   };
 
   // groupTransactionsByDay classifies by address (received/sent) and only counts transfer-action entries.
@@ -474,8 +496,7 @@ export default function App() {
         return;
       }
 
-      // Only process entries that are transfer-action entries (explicit Etherscan action === "transfer"
-      // OR tokentx-style entries via the isTransferAction fallback)
+      // Process the fetched transfer-like entries
       processTransactionData(transfers, address);
     } catch (err) {
       console.error("API Error:", err);
@@ -484,10 +505,6 @@ export default function App() {
       setIsLoading(false);
     }
   };
-
-  const sortedHandleOps = [...handleOpsTransactions].sort(
-    (a, b) => toMs(b.timeStamp) - toMs(a.timeStamp)
-  );
 
   const handleTrack = () => fetchAddressData();
   const isPositive = stats && parseFloat(stats.netChangeLast10Days) >= 0;
@@ -715,7 +732,8 @@ export default function App() {
                 className="w-full p-5 flex items-center justify-between hover:bg-gray-50 transition"
               >
                 <h2 className="text-base sm:text-lg font-bold text-gray-800">
-                  Deposits and Withdrawals ({handleOpsTransactions.length})
+                  Latest 25 ERC-20 Token Transfer Events (View All) (
+                  {latest25Transfers.length})
                 </h2>
                 {isTableOpen ? (
                   <ChevronUp className="w-5 h-5 text-gray-600" />
@@ -726,52 +744,72 @@ export default function App() {
 
               {isTableOpen && (
                 <div className="px-5 pb-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-sm text-gray-600">
+                      Showing latest {latest25Transfers.length} transfers
+                    </div>
+                    <div>
+                      <button className="text-sm text-blue-600 hover:underline">
+                        Download Page Data
+                      </button>
+                    </div>
+                  </div>
+
                   <div className="overflow-x-auto -mx-5 px-5">
-                    <table className="w-full text-left border-collapse min-w-[500px]">
+                    <table className="w-full text-left border-collapse min-w-[800px]">
                       <thead>
                         <tr className="border-b border-gray-200">
+                          <th className="py-2 px-2 text-sm">
+                            Transaction Hash
+                          </th>
+                          <th className="py-2 px-2 text-sm">Method</th>
+                          <th className="py-2 px-2 text-sm">Block</th>
+                          <th className="py-2 px-2 text-sm">Age</th>
+                          <th className="py-2 px-2 text-sm">From</th>
+                          <th className="py-2 px-2 text-sm">To</th>
                           <th className="py-2 px-2 text-sm">Amount</th>
-                          <th className="py-2 px-2 text-sm">Date</th>
-                          <th className="py-2 px-2 text-sm">Type</th>
+                          <th className="py-2 px-2 text-sm">Token</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {sortedHandleOps.map((tx) => {
+                        {latest25Transfers.map((tx) => {
                           const value = parseValue(tx);
-                          const date = new Date(
-                            toMs(tx.timeStamp)
-                          ).toLocaleDateString();
-
-                          let type = "";
-                          if (
-                            (tx.to || "").toLowerCase() ===
-                            address.toLowerCase()
-                          ) {
-                            type = "Deposit";
-                          } else if (
-                            (tx.from || "").toLowerCase() ===
-                            address.toLowerCase()
-                          ) {
-                            type = "Withdrawal";
-                          }
-
+                          const age = humanAge(tx.timeStamp);
+                          const method = tx.action || "Transfer";
                           return (
                             <tr
                               key={tx.hash}
                               className="border-b border-gray-100"
                             >
                               <td className="py-2 px-2 text-sm">
-                                {formatNumber(value)}
+                                <div className="font-mono text-xs break-all">
+                                  {tx.hash}
+                                </div>
                               </td>
-                              <td className="py-2 px-2 text-xs text-gray-600">
-                                {date}
+                              <td className="py-2 px-2 text-sm">{method}</td>
+                              <td className="py-2 px-2 text-sm">
+                                {tx.blockNumber || "-"}
+                              </td>
+                              <td className="py-2 px-2 text-sm text-gray-600">
+                                {age}
                               </td>
                               <td className="py-2 px-2 text-sm">
-                                <span
-                                  className={`${type === "Deposit" ? "text-green-600" : "text-red-600"} font-semibold`}
-                                >
-                                  {type}
-                                </span>
+                                <div title={tx.from || ""}>
+                                  {shortAddr(tx.from)}
+                                </div>
+                              </td>
+                              <td className="py-2 px-2 text-sm">
+                                <div title={tx.to || ""}>
+                                  {shortAddr(tx.to)}
+                                </div>
+                              </td>
+                              <td className="py-2 px-2 text-sm">
+                                {formatNumber(value)}
+                              </td>
+                              <td className="py-2 px-2 text-sm text-gray-600">
+                                {tx.tokenSymbol
+                                  ? `ERC-20: ${tx.tokenSymbol}`
+                                  : ""}
                               </td>
                             </tr>
                           );
