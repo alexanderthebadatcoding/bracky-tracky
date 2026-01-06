@@ -381,13 +381,20 @@ export default function App() {
       const BRACKY_CONTRACT = "0x06f71fb90F84b35302d132322A3C90E4477333b0";
       const CHAIN_ID = "8453";
 
-      // Call your Netlify Function instead of calling Etherscan directly
+      // Include required Etherscan params (module & action).
+      const params = new URLSearchParams({
+        module: "account",
+        action: "tokentx",
+        address,
+        contractaddress: BRACKY_CONTRACT,
+        chainid: CHAIN_ID,
+        startblock: "0",
+        endblock: "99999999",
+        sort: "asc",
+      });
+
       const resp = await fetch(
-        `/.netlify/functions/etherscan-proxy?address=${encodeURIComponent(
-          address
-        )}&contractaddress=${encodeURIComponent(
-          BRACKY_CONTRACT
-        )}&chainid=${encodeURIComponent(CHAIN_ID)}`
+        `/.netlify/functions/etherscan-proxy?${params.toString()}`
       );
 
       if (!resp.ok) {
@@ -430,12 +437,7 @@ export default function App() {
       }
 
       const transfers = data.result.filter(
-        (tx: {
-          tokenDecimal: any;
-          tokenSymbol: any;
-          tokenID: any;
-          value: string;
-        }) =>
+        (tx) =>
           tx.tokenDecimal &&
           tx.tokenSymbol &&
           !tx.tokenID &&
