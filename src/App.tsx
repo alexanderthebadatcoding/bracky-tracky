@@ -75,14 +75,12 @@ export default function App() {
     return Math.round(num).toString();
   };
 
-  const HANDLEOPS_ADDRESS = "0x7f136881b236ed9a403da7a7dd632e9d0390eb63";
-
+  // pick only Etherscan "transfer" actions
   const handleOpsTransactions = allTransfers.filter(
-    (tx) =>
-      (tx.to || "").toLowerCase() === HANDLEOPS_ADDRESS.toLowerCase() ||
-      (tx.from || "").toLowerCase() === HANDLEOPS_ADDRESS.toLowerCase()
+    (tx) => (tx.action || "").toLowerCase() === "transfer"
   );
 
+  // unchanged helpers
   const toMs = (ts: any): number => {
     if (ts === undefined || ts === null) return NaN;
     const s = String(ts).trim();
@@ -98,13 +96,16 @@ export default function App() {
     return raw / Math.pow(10, decimals);
   };
 
-  // groupTransactionsByDay now uses raw transfers (no handleOps filtering) so bar chart shows deposits & withdrawals raw
-  const groupTransactionsByDay = (transfers: any[], address: string) => {
+  // groupTransactionsByDay now groups raw transfer volume per day (no address)
+  const groupTransactionsByDay = (transfers: any[]) => {
     const dayMap: { [key: string]: TransactionData } = {};
     const now = Date.now();
     const tenDaysMs = 10 * 24 * 60 * 60 * 1000;
 
     transfers.forEach((tx: any) => {
+      // ensure it's an Etherscan transfer entry
+      if ((tx.action || "").toLowerCase() !== "transfer") return;
+
       const txTime = toMs(tx.timeStamp);
       if (Number.isNaN(txTime)) return;
       if (now - txTime > tenDaysMs) return;
@@ -114,6 +115,9 @@ export default function App() {
 
       if (!dayMap[dateKey]) {
         dayMap[dateKey] = {
+          // using the existing shape: received, sent, net
+          // here `received` holds total transfer volume for the date,
+          // `sent` left as 0 (or could be repurposed if you want separate incoming/outgoing totals),
           day: dateKey,
           received: 0,
           sent: 0,
@@ -123,11 +127,8 @@ export default function App() {
 
       const value = parseValue(tx);
 
-      if ((tx.to || "").toLowerCase() === address.toLowerCase()) {
-        dayMap[dateKey].received += value;
-      } else if ((tx.from || "").toLowerCase() === address.toLowerCase()) {
-        dayMap[dateKey].sent += value;
-      }
+      // accumulate total transfer volume (you can rename fields if you prefer)
+      dayMap[dateKey].received += value;
       dayMap[dateKey].net = dayMap[dateKey].received - dayMap[dateKey].sent;
     });
 
@@ -288,9 +289,7 @@ export default function App() {
       if (Number.isNaN(txTime)) return;
       const value = parseValue(tx);
 
-      const isBuyShares =
-        (tx.functionName || "").includes("handleOps") &&
-        (tx.to || "").toLowerCase() === HANDLEOPS_ADDRESS.toLowerCase();
+      const isBuyShares = (tx.functionName || "").includes("handleOps");
 
       if (isBuyShares) {
         buySharesTotal += value;
@@ -329,7 +328,7 @@ export default function App() {
     const currentBalance = totalReceived - totalSent;
     const netChangeLast10Days = receivedLast10Days - sentLast10Days;
 
-    const dailyTx = groupTransactionsByDay(transfers, userAddress);
+    const dailyTx = groupTransactionsByDay(transfers);
 
     // Generate chart anchored to currentBalance using raw transfers
     const balanceChart = generateBalanceChartFromCurrent(
